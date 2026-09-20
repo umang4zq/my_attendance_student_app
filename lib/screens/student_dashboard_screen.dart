@@ -11,6 +11,8 @@ import '../theme/app_colors.dart';
 import '../widgets/gauge_chart.dart';
 import 'student_login_screen.dart';
 
+enum ViewMode { monthly, semester1, semester2, yearly }
+
 class StudentDashboardScreen extends StatefulWidget {
   const StudentDashboardScreen({super.key});
 
@@ -35,6 +37,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   int _holidayCount = 0;
   double _percentage = 0.0;
   List<DateModel> _calendarDays = [];
+  ViewMode _viewMode = ViewMode.monthly;
+  List<Map<String, dynamic>> _monthlyBreakdown = [];
 
   @override
   void initState() {
@@ -67,33 +71,73 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
 
   Future<void> _loadMonthData() async {
     setState(() => _isLoading = true);
-    final monthStr = DateFormat('yyyy-MM').format(_selectedMonth);
+    
+    if (_viewMode == ViewMode.monthly) {
+      final monthStr = DateFormat('yyyy-MM').format(_selectedMonth);
+      final data = await _firestoreService.fetchStudentMonthlyAttendance(
+        streamId: _streamId,
+        studentId: _studentId,
+        yearMonth: monthStr,
+      );
 
-    final data = await _firestoreService.fetchStudentMonthlyAttendance(
-      streamId: _streamId,
-      studentId: _studentId,
-      yearMonth: monthStr,
-    );
+      if (mounted) {
+        setState(() {
+          _presentCount = data['presentCount'] ?? 0;
+          _absentCount = data['absentCount'] ?? 0;
+          _holidayCount = data['holidayCount'] ?? 0;
+          _percentage = data['percentage'] ?? 0.0;
+          _calendarDays =
+              (data['calendarDays'] as List?)?.cast<DateModel>() ?? [];
+          _monthlyBreakdown = [];
+          _isLoading = false;
+        });
+      }
+    } else {
+      List<int> months = [];
+      if (_viewMode == ViewMode.semester1) {
+        months = [1, 2, 3, 4, 5, 6];
+      } else if (_viewMode == ViewMode.semester2) {
+        months = [7, 8, 9, 10, 11, 12];
+      } else if (_viewMode == ViewMode.yearly) {
+        months = List.generate(12, (i) => i + 1);
+      }
 
-    if (mounted) {
-      setState(() {
-        _presentCount = data['presentCount'] ?? 0;
-        _absentCount = data['absentCount'] ?? 0;
-        _holidayCount = data['holidayCount'] ?? 0;
-        _percentage = data['percentage'] ?? 0.0;
-        _calendarDays =
-            (data['calendarDays'] as List?)?.cast<DateModel>() ?? [];
-        _isLoading = false;
-      });
+      final data = await _firestoreService.fetchAggregatedStudentAttendance(
+        streamId: _streamId,
+        studentId: _studentId,
+        year: _selectedMonth.year,
+        months: months,
+      );
+
+      if (mounted) {
+        setState(() {
+          _presentCount = data['presentCount'] ?? 0;
+          _absentCount = data['absentCount'] ?? 0;
+          _holidayCount = data['holidayCount'] ?? 0;
+          _percentage = data['percentage'] ?? 0.0;
+          _calendarDays = [];
+          _monthlyBreakdown = (data['monthlyBreakdown'] as List?)
+                  ?.cast<Map<String, dynamic>>() ??
+              [];
+          _isLoading = false;
+        });
+      }
     }
   }
 
   void _changeMonth(int offset) {
     setState(() {
-      _selectedMonth = DateTime(
-        _selectedMonth.year,
-        _selectedMonth.month + offset,
-      );
+      if (_viewMode == ViewMode.monthly) {
+        _selectedMonth = DateTime(
+          _selectedMonth.year,
+          _selectedMonth.month + offset,
+        );
+      } else {
+        _selectedMonth = DateTime(
+          _selectedMonth.year + offset,
+          _selectedMonth.month,
+        );
+      }
       _loadMonthData();
     });
   }
@@ -128,6 +172,46 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       appBar: AppBar(
         title: const Text('My Attendance'),
         actions: [
+          PopupMenuButton<ViewMode>(
+            initialValue: _viewMode,
+            onSelected: (ViewMode newSelection) {
+              setState(() {
+                _viewMode = newSelection;
+              });
+              _loadMonthData();
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<ViewMode>>[
+              const PopupMenuItem<ViewMode>(
+                value: ViewMode.monthly,
+                child: Text('Monthly'),
+              ),
+              const PopupMenuItem<ViewMode>(
+                value: ViewMode.semester1,
+                child: Text('Semester 1'),
+              ),
+              const PopupMenuItem<ViewMode>(
+                value: ViewMode.semester2,
+                child: Text('Semester 2'),
+              ),
+              const PopupMenuItem<ViewMode>(
+                value: ViewMode.yearly,
+                child: Text('Yearly'),
+              ),
+            ],
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16.w),
+              child: Row(
+                children: [
+                  Text(
+                    _getViewModeLabel(_viewMode),
+                    style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w600),
+                  ),
+                  SizedBox(width: 4.w),
+                  Icon(Icons.keyboard_arrow_down, size: 20.sp),
+                ],
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _logout,
@@ -210,7 +294,9 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                             onPressed: () => _changeMonth(-1),
                           ),
                           Text(
-                            DateFormat('MMMM yyyy').format(_selectedMonth),
+                            _viewMode == ViewMode.monthly
+                                ? DateFormat('MMMM yyyy').format(_selectedMonth)
+                                : _selectedMonth.year.toString(),
                             style: TextStyle(
                               fontSize: 18.sp,
                               fontWeight: FontWeight.bold,
@@ -285,134 +371,139 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                                 ),
                                 SizedBox(height: 32.h),
 
-                                // Days of week header
-                                Padding(
-                                  padding: EdgeInsets.only(bottom: 8.h),
-                                  child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceAround,
-                                    children:
-                                        [
-                                              'Sun',
-                                              'Mon',
-                                              'Tue',
-                                              'Wed',
-                                              'Thu',
-                                              'Fri',
-                                              'Sat',
-                                            ]
-                                            .map(
-                                              (d) => Expanded(
-                                                child: Center(
-                                                  child: Text(
-                                                    d,
-                                                    style: TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      color:
-                                                          Colors.grey.shade600,
-                                                      fontSize: 13.sp,
+                                if (_viewMode == ViewMode.monthly) ...[
+                                  // Days of week header
+                                  Padding(
+                                    padding: EdgeInsets.only(bottom: 8.h),
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceAround,
+                                      children:
+                                          [
+                                                'Sun',
+                                                'Mon',
+                                                'Tue',
+                                                'Wed',
+                                                'Thu',
+                                                'Fri',
+                                                'Sat',
+                                              ]
+                                              .map(
+                                                (d) => Expanded(
+                                                  child: Center(
+                                                    child: Text(
+                                                      d,
+                                                      style: TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color:
+                                                            Colors.grey.shade600,
+                                                        fontSize: 13.sp,
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
+                                              )
+                                              .toList(),
+                                    ),
+                                  ).animate().fade(delay: 350.ms),
+
+                                  // Calendar Grid
+                                  GridView.builder(
+                                    shrinkWrap: true,
+                                    physics: const NeverScrollableScrollPhysics(),
+                                    gridDelegate:
+                                        const SliverGridDelegateWithFixedCrossAxisCount(
+                                          crossAxisCount: 7,
+                                          mainAxisSpacing: 8,
+                                          crossAxisSpacing: 8,
+                                          childAspectRatio: 1,
+                                        ),
+                                    itemCount: monthDays.length + firstDayOffset,
+                                    itemBuilder: (context, index) {
+                                      if (index < firstDayOffset) {
+                                        return const SizedBox.shrink();
+                                      }
+                                      final day =
+                                          monthDays[index - firstDayOffset];
+                                      final dm = _calendarDays.firstWhere(
+                                        (d) => d.date.day == day.day,
+                                        orElse: () => DateModel(
+                                          date: day,
+                                          isPresent: false,
+                                          isAbsent: false,
+                                          isHoliday: false,
+                                        ),
+                                      );
+
+                                      Color bgColor = Colors.grey.shade100;
+                                      Color textColor = Colors.black54;
+
+                                      if (day.weekday == DateTime.sunday) {
+                                        bgColor = Colors.yellow.withOpacity(0.3);
+                                        textColor = Colors.orange.shade800;
+                                      } else if (dm.isPresent) {
+                                        bgColor = AppColors.present.withOpacity(
+                                          0.2,
+                                        );
+                                        textColor = AppColors.present;
+                                      } else if (dm.isAbsent) {
+                                        bgColor = AppColors.absent.withOpacity(
+                                          0.2,
+                                        );
+                                        textColor = AppColors.absent;
+                                      } else if (dm.isHoliday) {
+                                        bgColor = AppColors.holiday.withOpacity(
+                                          0.2,
+                                        );
+                                        textColor = AppColors.holiday;
+                                      } else if (day.isAfter(DateTime.now())) {
+                                        bgColor = Colors.grey.shade200;
+                                        textColor = Colors.grey.shade400;
+                                      }
+
+                                      return Container(
+                                            decoration: BoxDecoration(
+                                              color: bgColor,
+                                              borderRadius: BorderRadius.circular(
+                                                8.r,
                                               ),
-                                            )
-                                            .toList(),
+                                              border:
+                                                  dm.isPresent ||
+                                                      dm.isAbsent ||
+                                                      dm.isHoliday ||
+                                                      day.weekday ==
+                                                          DateTime.sunday
+                                                  ? Border.all(
+                                                      color: textColor
+                                                          .withOpacity(0.5),
+                                                    )
+                                                  : null,
+                                            ),
+                                            child: Center(
+                                              child: Text(
+                                                '${day.day}',
+                                                style: TextStyle(
+                                                  color: textColor,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 14.sp,
+                                                ),
+                                              ),
+                                            ),
+                                          )
+                                          .animate()
+                                          .fade(
+                                            delay: Duration(
+                                              milliseconds: 400 + (index * 15),
+                                            ),
+                                          )
+                                          .scale(curve: Curves.easeOutBack);
+                                    },
                                   ),
-                                ).animate().fade(delay: 350.ms),
+                                ] else ...[
+                                  _buildMonthlyBreakdownList()
+                                ],
 
-                                // Calendar Grid
-                                GridView.builder(
-                                  shrinkWrap: true,
-                                  physics: const NeverScrollableScrollPhysics(),
-                                  gridDelegate:
-                                      const SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: 7,
-                                        mainAxisSpacing: 8,
-                                        crossAxisSpacing: 8,
-                                        childAspectRatio: 1,
-                                      ),
-                                  itemCount: monthDays.length + firstDayOffset,
-                                  itemBuilder: (context, index) {
-                                    if (index < firstDayOffset) {
-                                      return const SizedBox.shrink();
-                                    }
-                                    final day =
-                                        monthDays[index - firstDayOffset];
-                                    final dm = _calendarDays.firstWhere(
-                                      (d) => d.date.day == day.day,
-                                      orElse: () => DateModel(
-                                        date: day,
-                                        isPresent: false,
-                                        isAbsent: false,
-                                        isHoliday: false,
-                                      ),
-                                    );
-
-                                    Color bgColor = Colors.grey.shade100;
-                                    Color textColor = Colors.black54;
-
-                                    if (day.weekday == DateTime.sunday) {
-                                      bgColor = Colors.yellow.withOpacity(0.3);
-                                      textColor = Colors.orange.shade800;
-                                    } else if (dm.isPresent) {
-                                      bgColor = AppColors.present.withOpacity(
-                                        0.2,
-                                      );
-                                      textColor = AppColors.present;
-                                    } else if (dm.isAbsent) {
-                                      bgColor = AppColors.absent.withOpacity(
-                                        0.2,
-                                      );
-                                      textColor = AppColors.absent;
-                                    } else if (dm.isHoliday) {
-                                      bgColor = AppColors.holiday.withOpacity(
-                                        0.2,
-                                      );
-                                      textColor = AppColors.holiday;
-                                    } else if (day.isAfter(DateTime.now())) {
-                                      bgColor = Colors.grey.shade200;
-                                      textColor = Colors.grey.shade400;
-                                    }
-
-                                    return Container(
-                                          decoration: BoxDecoration(
-                                            color: bgColor,
-                                            borderRadius: BorderRadius.circular(
-                                              8.r,
-                                            ),
-                                            border:
-                                                dm.isPresent ||
-                                                    dm.isAbsent ||
-                                                    dm.isHoliday ||
-                                                    day.weekday ==
-                                                        DateTime.sunday
-                                                ? Border.all(
-                                                    color: textColor
-                                                        .withOpacity(0.5),
-                                                  )
-                                                : null,
-                                          ),
-                                          child: Center(
-                                            child: Text(
-                                              '${day.day}',
-                                              style: TextStyle(
-                                                color: textColor,
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 14.sp,
-                                              ),
-                                            ),
-                                          ),
-                                        )
-                                        .animate()
-                                        .fade(
-                                          delay: Duration(
-                                            milliseconds: 400 + (index * 15),
-                                          ),
-                                        )
-                                        .scale(curve: Curves.easeOutBack);
-                                  },
-                                ),
                               ],
                             ),
                     ],
@@ -420,6 +511,73 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                 ),
               ),
             ),
+    );
+  }
+
+  String _getViewModeLabel(ViewMode mode) {
+    switch (mode) {
+      case ViewMode.monthly: return 'Monthly';
+      case ViewMode.semester1: return 'Sem 1';
+      case ViewMode.semester2: return 'Sem 2';
+      case ViewMode.yearly: return 'Yearly';
+    }
+  }
+
+  Widget _buildMonthlyBreakdownList() {
+    return Column(
+      children: _monthlyBreakdown.map((mb) {
+        final monthInt = mb['month'] as int;
+        final percentage = mb['percentage'] as double;
+        final hasData = mb['hasData'] as bool;
+        final monthName = DateFormat('MMMM').format(DateTime(2026, monthInt));
+
+        return Container(
+          margin: EdgeInsets.only(bottom: 12.h),
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12.r),
+            border: Border.all(color: Colors.grey.withOpacity(0.2)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.02),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                monthName,
+                style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w600),
+              ),
+              hasData
+                  ? Text(
+                      '${percentage.toStringAsFixed(1)}%',
+                      style: TextStyle(
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.bold,
+                        color: percentage >= 75
+                            ? AppColors.present
+                            : percentage >= 50
+                                ? Colors.orange
+                                : AppColors.absent,
+                      ),
+                    )
+                  : Text(
+                      'No Data',
+                      style: TextStyle(
+                        fontSize: 14.sp,
+                        color: Colors.grey.shade500,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -441,3 +599,4 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
     );
   }
 }
+ 
